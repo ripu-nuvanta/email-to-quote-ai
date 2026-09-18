@@ -1,0 +1,33 @@
+# Secrets - never commit real keys or passwords
+.env
+.env.*
+!.env.example
+
+# Python environment and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data generated when the app runs
+*.db
+*.db-journal
+outbox/
+quote_pdfs/
+*.log
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Next.js approval app
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+
+# Stale copy of the version-1 project, kept on disk but not part of the repo
+/quote-automation/

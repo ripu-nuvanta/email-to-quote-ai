@@ -1,0 +1,216 @@
+{
+  "name": "Quote automation 1 - Gmail intake",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "label:quote-requests is:unread"
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "id": "dd72bdfe-8cc2-55c6-b35d-e44deab6228d",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Map each Gmail message to the quote API's InboundEmail format (attachments as base64).\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const email = item.json;\n  const attachments = [];\n  for (const [key, meta] of Object.entries(item.binary ?? {})) {\n    const buffer = await this.helpers.getBinaryDataBuffer(i, key);\n    attachments.push({\n      filename: meta.fileName ?? key,\n      content_type: meta.mimeType ?? 'application/octet-stream',\n      content_base64: buffer.toString('base64'),\n    });\n  }\n  const from = email.from?.value?.[0] ?? {};\n  out.push({\n    json: {\n      message_id: email.messageId ?? email.id,\n      provider_message_id: email.id,\n      thread_id: email.threadId ?? null,\n      from_email: from.address,\n      from_name: from.name || null,\n      subject: email.subject ?? '',\n      body_text: email.text ?? '',\n      body_html: email.html || null,\n      attachments,\n    },\n    pairedItem: i,\n  });\n}\nreturn out;"
+      },
+      "id": "2252e082-e34e-5759-8cf1-151da2a34baa",
+      "name": "Build inbound payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QUOTE_API_URL }}/api/inbound-email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.QUOTE_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "7f054bcd-43c7-5364-9986-96ce8ae720b2",
+      "name": "Create draft quote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $('Gmail Trigger').item.json.id }}"
+      },
+      "id": "f39c927a-f4a8-5692-93e8-e2ab58761673",
+      "name": "Mark email as read",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        720,
+        160
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "372854a0-89e7-51c6-85a8-f2a850b99702",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "pending_approval",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "555c43d6-6356-50d5-81af-762e1e649388",
+      "name": "Needs approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.SALES_TEAM_EMAIL }}",
+        "subject": "=[Approval needed] Quote {{ $json.number }}",
+        "emailType": "text",
+        "message": "=A draft quote is ready for review.\n\nLines needing review: {{ $json.needs_review_count }}\nOpen: {{ $json.approval_url }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "2bed8615-bf25-5e11-aaca-1fedb0f9dfdc",
+      "name": "Notify salesperson",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        960,
+        -80
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build inbound payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build inbound payload": {
+      "main": [
+        [
+          {
+            "node": "Create draft quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create draft quote": {
+      "main": [
+        [
+          {
+            "node": "Needs approval?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark email as read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs approval?": {
+      "main": [
+        [
+          {
+            "node": "Notify salesperson",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,225 @@
+{
+  "name": "Quote automation 2 - Outlook intake",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "output": "raw",
+        "filters": {
+          "readStatus": "unread"
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "id": "17bdb1b6-619d-5a40-9899-dc1f34d92661",
+      "name": "Outlook Trigger",
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Map each Outlook message to the quote API's InboundEmail format (attachments as base64).\nconst out = [];\nfor (const [i, item] of $input.all().entries()) {\n  const email = item.json;\n  const attachments = [];\n  for (const [key, meta] of Object.entries(item.binary ?? {})) {\n    const buffer = await this.helpers.getBinaryDataBuffer(i, key);\n    attachments.push({\n      filename: meta.fileName ?? key,\n      content_type: meta.mimeType ?? 'application/octet-stream',\n      content_base64: buffer.toString('base64'),\n    });\n  }\n  const isHtml = (email.body?.contentType ?? '').toLowerCase() === 'html';\n  out.push({\n    json: {\n      message_id: email.internetMessageId ?? email.id,\n      provider_message_id: email.id,\n      thread_id: email.conversationId ?? null,\n      from_email: email.from?.emailAddress?.address,\n      from_name: email.from?.emailAddress?.name || null,\n      subject: email.subject ?? '',\n      body_text: isHtml ? '' : (email.body?.content ?? ''),\n      body_html: isHtml ? email.body.content : null,\n      attachments,\n    },\n    pairedItem: i,\n  });\n}\nreturn out;"
+      },
+      "id": "38724cf5-5564-5656-b2ea-0fbc9e79ef04",
+      "name": "Build inbound payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QUOTE_API_URL }}/api/inbound-email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.QUOTE_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "b1a1febb-6922-5db9-bcd1-5e923c371b78",
+      "name": "Create draft quote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "update",
+        "messageId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Outlook Trigger').item.json.id }}"
+        },
+        "updateFields": {
+          "isRead": true
+        }
+      },
+      "id": "69053e1e-ae36-55de-9cb2-edddef187418",
+      "name": "Mark email as read",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        720,
+        160
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "730407a3-b267-5d3a-930c-ec5e504881d1",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "pending_approval",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "439b4c7a-fd71-5f28-9126-eeb1783f4139",
+      "name": "Needs approval?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $env.SALES_TEAM_EMAIL }}",
+        "subject": "=[Approval needed] Quote {{ $json.number }}",
+        "bodyContent": "=A draft quote is ready for review.\n\nLines needing review: {{ $json.needs_review_count }}\nOpen: {{ $json.approval_url }}",
+        "additionalFields": {
+          "bodyContentType": "Text"
+        }
+      },
+      "id": "ad22c54a-c9c8-55a0-bb71-63bd7f8e4fd4",
+      "name": "Notify salesperson",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        960,
+        -80
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Outlook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Build inbound payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build inbound payload": {
+      "main": [
+        [
+          {
+            "node": "Create draft quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create draft quote": {
+      "main": [
+        [
+          {
+            "node": "Needs approval?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark email as read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs approval?": {
+      "main": [
+        [
+          {
+            "node": "Notify salesperson",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

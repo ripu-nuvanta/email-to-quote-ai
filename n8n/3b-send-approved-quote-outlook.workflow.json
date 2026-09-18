@@ -1,0 +1,317 @@
+{
+  "name": "Quote automation 3b - Send approved quote (Outlook)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "quote-approved",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "283356ac-33d7-5fc9-b6c5-9c9b07f45891",
+      "name": "Quote approved",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "c5119600-60ed-53e0-aabe-c971f344e459"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QUOTE_API_URL }}/api/integrations/quotes/{{ $json.body.quote_id }}/claim",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.QUOTE_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "c7f7d5f9-28a4-557f-b084-e7740ce4165e",
+      "name": "Claim quote",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Turn the PDF from the claim response into an n8n binary file called \"data\".\nconst out = [];\nfor (const item of $input.all()) {\n  const { attachment_base64, ...quote } = item.json;\n  const pdf = await this.helpers.prepareBinaryData(\n    Buffer.from(attachment_base64, 'base64'), quote.attachment_filename, quote.attachment_mime_type);\n  out.push({ json: quote, binary: { data: pdf } });\n}\nreturn out;"
+      },
+      "id": "efdaec2a-9520-51c4-a70f-d65d62f6fe20",
+      "name": "Prepare email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "56a8d97e-c5f3-5a0a-8215-29d928724261",
+              "leftValue": "={{ $json.reply_to_provider_message_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "66c7f83b-81e3-5040-a77d-37ffc65f3ae6",
+      "name": "Reply in customer thread?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "reply",
+        "messageId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.reply_to_provider_message_id }}"
+        },
+        "message": "={{ $json.body_text }}",
+        "additionalFields": {
+          "attachments": {
+            "attachments": [
+              {
+                "binaryPropertyName": "data"
+              }
+            ]
+          }
+        }
+      },
+      "id": "8eee3357-b27c-51a6-8bbd-73b8765ffd95",
+      "name": "Reply to customer",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -100
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "",
+          "name": "Microsoft Outlook account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toRecipients": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "bodyContent": "={{ $json.body_text }}",
+        "additionalFields": {
+          "bodyContentType": "Text",
+          "ccRecipients": "={{ ($json.cc || []).join(',') }}",
+          "attachments": {
+            "attachments": [
+              {
+                "binaryPropertyName": "data"
+              }
+            ]
+          }
+        }
+      },
+      "id": "1fe65dc0-bca5-512c-8c6f-8ebab2bc2361",
+      "name": "Send to customer",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        900,
+        100
+      ],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "",
+          "name": "Microsoft Outlook account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QUOTE_API_URL }}/api/integrations/quotes/{{ $('Prepare email').item.json.quote_id }}/sent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.QUOTE_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ claim_token: $('Prepare email').item.json.claim_token, provider_message_id: $json.id ?? null }) }}"
+      },
+      "id": "d3fce8af-621d-5248-8910-c12c1ea522c5",
+      "name": "Report sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QUOTE_API_URL }}/api/integrations/quotes/{{ $('Prepare email').item.json.quote_id }}/failed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.QUOTE_WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ claim_token: $('Prepare email').item.json.claim_token, error: String($json.error?.message ?? $json.error ?? 'Email step failed') }) }}"
+      },
+      "id": "9f10fcf2-cb49-58d2-a801-553f3ef0a106",
+      "name": "Report failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Quote approved": {
+      "main": [
+        [
+          {
+            "node": "Claim quote",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim quote": {
+      "main": [
+        [
+          {
+            "node": "Prepare email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare email": {
+      "main": [
+        [
+          {
+            "node": "Reply in customer thread?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply in customer thread?": {
+      "main": [
+        [
+          {
+            "node": "Reply to customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send to customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to customer": {
+      "main": [
+        [
+          {
+            "node": "Report sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to customer": {
+      "main": [
+        [
+          {
+            "node": "Report sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
